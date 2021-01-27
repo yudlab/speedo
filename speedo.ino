@@ -171,6 +171,8 @@ void setup ()
   }
 void loop()
   {
+    server.handleClient();
+    
     //set speed to zero if HALL Sensor open for more than 2s
     if ( millis() - tLastRev > 2000 ){
       currentSpeed = 0;
@@ -180,24 +182,29 @@ void loop()
       tLastRefresh = millis();
     }
 
-    server.handleClient();
-
-    lcd.home();
-    lcd.print(currentSpeed);
-    lcd.setCursor(5, 0);
-    lcd.print("KM/H");
-    lcd.setCursor(0, 1);
-    lcd.print("TRIP: ");
-    lcd.setCursor(10, 1);
-    lcd.print(trip);
-    delay(900);
+    if(previousSpeed != currentSpeed) {
+      lcd.clear();
+      lcd.home();
+      lcd.print(currentSpeed);
+      lcd.setCursor(4, 0);
+      lcd.print(" km/h   ODO");
+      lcd.setCursor(0, 1);
+      lcd.print("TRP:");
+      lcd.setCursor(4, 1);
+      lcd.print(trip);
+      lcd.setCursor(11, 1);
+      lcd.print(odo);
+      previousSpeed = currentSpeed;
+    }
+    
+    delay(850);
   }
 bool getConfig ()
   {
     Serial.println();
     Serial.println("Connecting to SD(getConfig):");
-    if (!SD.begin(4)) {
-      Serial.println("SD Connection error(state 4)");
+    if (!SD.begin(D8)) {
+      Serial.println("SD Connection error(state D8)");
       return false;
     }
     Serial.println("SD Connected.");
@@ -235,7 +242,6 @@ bool getConfig ()
   }
 bool updateDistanceSD ()
   {
-    previousSpeed = currentSpeed;
     SD.remove(configFile);
 
     SDCon = SD.open(configFile, FILE_WRITE);
