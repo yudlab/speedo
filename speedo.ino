@@ -5,17 +5,17 @@
   @Repo   github.com/yudlab
 
   LCD Connection:
+  SCL - D1
+  SDA - D2
+  VCC - Vin - 5v
   GND - GND
-  VCC - Vin
-  SDA - D4
-  SCL - D3
 
   SD Connection:
   GND  - GND
   VCC  - 3.3v
+  SCK  - D5
   MISO - D6
   MOSI - D7
-  SCK  - D5
   CS   - D8
 
 */
@@ -36,89 +36,22 @@ uint8_t HALL_SENSOR = D4; // Pin where the hall sensor is connected to
 uint8_t CLEAR_ODO_BTN =  D3; //Pin to reset odo
 const char* configFile = "config.odo"; //file containing the configuration settings
 
-#ifndef APSSID
-#define APSSID "Motocycle-Speedo";
-#define APPSK  "00000000";
-#endif
-
-const char *ssid = APSSID;
-const char *password = APPSK;
-ESP8266WebServer server(80);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 String speedoSDData;
 DynamicJsonBuffer jsonBuffer;
 File SDCon;
 char buffer[200];
-char buffer1[200];
 int ledState = LOW; // ledState used to set the LED
 unsigned long previousMillis = 0; // will store last time LED was updated
 const long blinkInterval = 700; // ms
 bool updateSD = false;
 
-
-float odo, trip, previousSpeed, start, currentSpeed, tLastRev, tLastRefresh, tLastReset;
+float previousSpeed, start, currentSpeed, tLastRev, tLastRefresh, tLastReset;
 int tElapsed;
+unsigned long odo, trip;
 
-const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE HTML><html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    html {
-     font-family: Arial;
-     display: inline-block;
-     margin: 0px auto;
-     text-align: center;
-    }
-    h2 { font-size: 3.0rem; }
-    p { font-size: 3.0rem; }
-    .units { font-size: 1.2rem; }
-    .dht-labels{
-      font-size: 1.5rem;
-      vertical-align:middle;
-      padding-bottom: 15px;
-    }
-  </style>
-</head>
-<body>
-  <h2>SpeedoV1</h2>
-  <p>
-    <span class="dht-labels">Speed</span> 
-    <span id="speed">%SPEED%</span>
-    <sup class="units">km/h</sup>
-  </p>
-  <p>
-    <span class="dht-labels">Trip</span>
-    <span id="trip">%TRIP%</span>
-    <sup class="units">km</sup>
-  </p>
-  
-  <p>
-    <span class="dht-labels">Odo</span>
-    <span id="odo">%ODO%</span>
-    <sup class="units">km</sup>
-  </p>
-</body>
-<script>
-setInterval(function ( ) {
-  var xhttp = new XMLHttpRequest();
-  xhttp.onreadystatechange = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      var jsonData  = JSON.parse(this.responseText);
-      document.getElementById("speed").innerHTML = jsonData.speed;
-      document.getElementById("trip").innerHTML = jsonData.trip;
-      document.getElementById("odo").innerHTML = jsonData.odo;
-    }
-  };
-  xhttp.open("GET", "/stats", true);
-  xhttp.send();
-}, 800 ) ;
-</script>
-</html>)rawliteral";
-
-
-void ICACHE_RAM_ATTR speedCalc ();
+void ICACHE_RAM_ATTR counter ();
 void ICACHE_RAM_ATTR resetOdo ();
 
 void setup ()
@@ -129,8 +62,8 @@ void setup ()
       *** You would want to comment this if on PROD */
     }
     Wire.begin(D2, D1);
-    //toggle function speedCalc when HALL Sensor closes
-    attachInterrupt(digitalPinToInterrupt(HALL_SENSOR), speedCalc, RISING);
+    //toggle function counter when HALL Sensor closes
+    attachInterrupt(digitalPinToInterrupt(HALL_SENSOR), counter, RISING);
     attachInterrupt(digitalPinToInterrupt(CLEAR_ODO_BTN), resetOdo, RISING);
     pinMode(LED_BUILTIN, OUTPUT);
     lcd.init();
@@ -138,17 +71,6 @@ void setup ()
     lcd.home();
     lcd.print('Initializing...');
     Serial.println();
-    Serial.println("Configuring access point...");
-    /* You can remove the password parameter if you want the AP to be open. */
-    WiFi.softAP(ssid, password);
-
-    IPAddress myIP = WiFi.softAPIP();
-    Serial.print("AP IP address: ");
-    Serial.println(myIP);
-    server.on("/", handleRoot);
-    server.on("/stats", handleStats);
-    server.begin();
-    Serial.println("HTTP server started");
 
     if(!getConfig()) {
       odo = 0;
@@ -168,21 +90,12 @@ void setup ()
     lcd.home();
     lcd.print("Hello Yudish!");
     delay(3000); //just to allow you to read the initialization message
+    previousSpeed = 0.01;
   }
 void loop()
   {
-    server.handleClient();
-    
-    //set speed to zero if HALL Sensor open for more than 2s
-    if ( millis() - tLastRev > 2000 ){
-      currentSpeed = 0;
-    }
-    if ( updateSD && currentSpeed != previousSpeed &&  millis() - tLastRefresh > 10000 ) {
-      updateDistanceSD();    
-      tLastRefresh = millis();
-    }
-
     if(previousSpeed != currentSpeed) {
+      previousSpeed = currentSpeed;
       lcd.clear();
       lcd.home();
       lcd.print(currentSpeed);
@@ -194,10 +107,19 @@ void loop()
       lcd.print(trip);
       lcd.setCursor(11, 1);
       lcd.print(odo);
-      previousSpeed = currentSpeed;
     }
     
-    delay(850);
+    //set speed to zero if HALL Sensor open for more than 2s
+    if ( millis() - tLastRev > 2000 ){
+      currentSpeed = 0;
+    }
+    if ( updateSD && ( currentSpeed != previousSpeed && ( millis() - tLastRefresh ) > 15000 ) ) {
+      updateDistanceSD();    
+      tLastRefresh = millis();
+    }
+
+    
+    delay(1100);
   }
 bool getConfig ()
   {
@@ -267,9 +189,8 @@ bool updateDistanceSD ()
       return false;
     }
   }
-void speedCalc ()
+void counter ()
   { //Function called by the interrupt
-    blink(blinkInterval);
     tLastRev = millis();
     if ( ( millis() - start ) > debounceRate )
     {
@@ -281,6 +202,7 @@ void speedCalc ()
     odo = odo + wheelCirc;
     trip = trip + wheelCirc;
 
+    blink(blinkInterval);
   }
 void resetOdo ()
   {
@@ -288,6 +210,8 @@ void resetOdo ()
       trip = 0;
       updateDistanceSD();
       tLastReset = millis();
+      lcd.clear();
+      lcd.print("ODO RESET!");
     }
   }
 int blink (int blinkInterval)
@@ -308,19 +232,3 @@ int blink (int blinkInterval)
       digitalWrite(LED_BUILTIN, ledState);
     }
   }
-void handleRoot() {
-  server.send(200, "text/html", index_html);
-}
-void handleStats() {
-  DynamicJsonBuffer jsonBuffer;
-  JsonObject& dist = jsonBuffer.createObject();
-  if (!dist.success()) {
-    Serial.println("ERROR CREATING JSON");
-    return;
-  }
-  dist["speed"] = currentSpeed;
-  dist["odo"] = odo;
-  dist["trip"] = trip;
-  dist.prettyPrintTo(buffer1);
-  server.send(200, "application/json", String(buffer1));
-}
